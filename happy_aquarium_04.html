@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>開心水族箱 - Happy Aquarium (海龜版)</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body, html {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #020b14;
+    }
+
+    #aquarium-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      /* 設定 /image/bg01.png 為背景，並加入備用漸層 */
+      background-image: url('./image/bg01.png'), linear-gradient(180deg, #0a3d62 0%, #0c2461 50%, #020b14 100%);
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      transition: filter 1.5s ease;
+    }
+
+    /* 夜間模式：透過 CSS 濾鏡調暗並增加冷色調遮罩 */
+    #aquarium-container.night-mode {
+      filter: brightness(0.4) contrast(1.1) hue-rotate(15deg);
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* 海龜 DOM 元素：解決 CanvasdrawImage 無法播放 GIF 動畫的問題 */
+    #turtle-gif {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+      z-index: 10;
+      will-change: transform;
+      transition: opacity 0.3s ease;
+    }
+
+    /* 玻璃質感 UI 控制面板 */
+    .ui-panel {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      z-index: 100;
+      background: rgba(255, 255, 255, 0.12);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 16px;
+      padding: 16px 20px;
+      color: #fff;
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 220px;
+    }
+
+    .ui-panel h2 {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-align: center;
+      margin-bottom: 4px;
+      color: #7efff5;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+    }
+
+    .btn {
+      background: rgba(255, 255, 255, 0.15);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      border-radius: 8px;
+      color: #fff;
+      padding: 8px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .btn:hover {
+      background: rgba(255, 255, 255, 0.3);
+      transform: translateY(-1px);
+    }
+
+    .btn:active {
+      transform: translateY(1px);
+    }
+
+    .file-input-wrapper {
+      position: relative;
+      overflow: hidden;
+      display: inline-block;
+      width: 100%;
+    }
+
+    .file-input-wrapper input[type=file] {
+      font-size: 100px;
+      position: absolute;
+      left: 0;
+      top: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    .status-text {
+      font-size: 11px;
+      color: #a0e5ff;
+      text-align: center;
+      line-height: 1.4;
+    }
+
+    .instructions {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255, 255, 255, 0.8);
+      font-size: 13px;
+      pointer-events: none;
+      letter-spacing: 0.5px;
+      background: rgba(0, 0, 0, 0.4);
+      backdrop-filter: blur(4px);
+      padding: 6px 16px;
+      border-radius: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+  </style>
+</head>
+<body>
+
+  <div id="aquarium-container">
+    <canvas id="aquariumCanvas"></canvas>
+    
+    <img id="turtle-gif" src="fish/turtle1.gif" alt="海龜">
+
+    <div class="ui-panel">
+      <h2>開心水族箱</h2>
+      <button class="btn" id="btn-fullscreen">📌 全螢幕切換</button>
+      <button class="btn" id="btn-theme">🌙 切換日夜燈光</button>
+      
+      <div class="file-input-wrapper">
+        <button class="btn" style="width:100%;">📁 讀取 /fish 資料夾</button>
+        <input type="file" id="folder-input" webkitdirectory directory multiple accept="image/png">
+      </div>
+
+      <div class="status-text" id="status-display">目前使用: 預設向量魚隻</div>
+    </div>
+
+    <div class="instructions">💡 滑鼠點擊水面：讓周圍生物快速逃跑</div>
+  </div>
+
+  <script>
+    const container = document.getElementById('aquarium-container');
+    const canvas = document.getElementById('aquariumCanvas');
+    const ctx = canvas.getContext('2d');
+    const statusDisplay = document.getElementById('status-display');
+    const turtleDom = document.getElementById('turtle-gif');
+
+    let width, height;
+    let isNight = false;
+    let customFishImages = [];
+
+    // 自動縮放畫布
+    function resizeCanvas() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // ==========================================
+    // 讀取 /fish 資料夾下的 png 圖片
+    // ==========================================
+    function autoLoadDefaultFishFolder() {
+      const defaultPaths = [];
+      for (let i = 1; i <= 10; i++) {
+        defaultPaths.push(`./fish/fish${i}.png`);
+        defaultPaths.push(`./fish/${i}.png`);
+      }
+
+      let loadedCount = 0;
+      defaultPaths.forEach(src => {
+        const img = new Image();
+        img.onload = () => {
+          customFishImages.push(img);
+          loadedCount++;
+          statusDisplay.innerText = `已從 /fish 載入 ${loadedCount} 張圖片`;
+          reinitFishWithImages();
+        };
+        img.src = src;
+      });
+    }
+
+    // 手動選擇 /fish 資料夾讀取 .png
+    document.getElementById('folder-input').addEventListener('change', (e) => {
+      const files = Array.from(e.target.files).filter(file => file.name.endsWith('.png'));
+      if (files.length === 0) {
+        alert('資料夾中沒有找到 .png 檔案！');
+        return;
+      }
+
+      customFishImages = [];
+      let loaded = 0;
+
+      files.forEach(file => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const img = new Image();
+          img.onload = () => {
+            customFishImages.push(img);
+            loaded++;
+            if (loaded === files.length) {
+              statusDisplay.innerText = `成功匯入 ${loaded} 張自訂魚隻 PNG！`;
+              reinitFishWithImages();
+            }
+          };
+          img.src = event.target.result;
+        };
+        reader.readAsDataURL(file);
+      });
+    });
+
+    // ==========================================
+    // 水族箱物理與物件 (Physics & Entities)
+    // ==========================================
+
+    class ParticleRipple {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.radius = 5;
+        this.maxRadius = 120;
+        this.alpha = 0.8;
+      }
+      update() {
+        this.radius += 4;
+        this.alpha -= 0.02;
+      }
+      draw(ctx) {
+        if (this.alpha <= 0) return;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(126, 255, 245, ${this.alpha})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    class Bubble {
+      constructor() {
+        this.reset();
+      }
+      reset() {
+        this.x = Math.random() * width;
+        this.y = height + Math.random() * 50;
+        this.size = Math.random() * 4 + 2;
+        this.speedY = Math.random() * 1.5 + 0.8;
+        this.wobble = Math.random() * Math.PI * 2;
+        this.wobbleSpeed = Math.random() * 0.05 + 0.02;
+        this.opacity = Math.random() * 0.5 + 0.3;
+      }
+      update() {
+        this.y -= this.speedY;
+        this.wobble += this.wobbleSpeed;
+        this.x += Math.sin(this.wobble) * 0.5;
+        if (this.y < -10) this.reset();
+      }
+      draw(ctx) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255, 255, 255, ${this.opacity})`;
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    class Fish {
+      constructor(img = null) {
+        this.img = img;
+        this.x = Math.random() * width;
+        this.y = Math.random() * (height - 150) + 50;
+        
+        this.size = Math.random() * 30 + 45; 
+        this.vx = (Math.random() - 0.5) * 2;
+        this.vy = (Math.random() - 0.5) * 1;
+        this.maxSpeed = Math.random() * 1.5 + 1.2;
+        this.maxFleeSpeed = 8;
+        
+        this.color = `hsl(${Math.random() * 360}, 85%, 65%)`;
+        this.tailAngle = 0;
+
+        this.targetX = Math.random() * width;
+        this.targetY = Math.random() * height;
+        this.changeTargetTimer = 0;
+      }
+
+      update() {
+        this.changeTargetTimer++;
+        if (this.changeTargetTimer > 180) {
+          this.targetX = Math.random() * (width - 100) + 50;
+          this.targetY = Math.random() * (height - 150) + 50;
+          this.changeTargetTimer = 0;
+        }
+
+        const dx = this.targetX - this.x;
+        const dy = this.targetY - this.y;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist > 10) {
+          this.vx += (dx / dist) * 0.03;
+          this.vy += (dy / dist) * 0.03;
+        }
+
+        const margin = 80;
+        if (this.x < margin) this.vx += 0.1;
+        if (this.x > width - margin) this.vx -= 0.1;
+        if (this.y < margin) this.vy += 0.1;
+        if (this.y > height - margin - 50) this.vy -= 0.1;
+
+        const currentSpeed = Math.hypot(this.vx, this.vy);
+        const limit = this.fleeing ? this.maxFleeSpeed : this.maxSpeed;
+        if (currentSpeed > limit) {
+          this.vx = (this.vx / currentSpeed) * limit;
+          this.vy = (this.vy / currentSpeed) * limit;
+        }
+
+        if (this.fleeing) {
+          this.vx *= 0.96;
+          this.vy *= 0.96;
+          if (Math.hypot(this.vx, this.vy) < this.maxSpeed) {
+            this.fleeing = false;
+          }
+        }
+
+        this.x += this.vx;
+        this.y += this.vy;
+
+        this.tailAngle += this.fleeing ? 0.3 : 0.08;
+      }
+
+      fleeFrom(px, py) {
+        const dx = this.x - px;
+        const dy = this.y - py;
+        const dist = Math.hypot(dx, dy);
+        const fleeRadius = 220;
+
+        if (dist < fleeRadius) {
+          const force = (1 - dist / fleeRadius) * 12;
+          this.vx = (dx / dist) * force;
+          this.vy = (dy / dist) * force;
+          this.fleeing = true;
+        }
+      }
+
+      draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        const isFacingLeft = this.vx < 0;
+        if (isFacingLeft) {
+          ctx.scale(-1, 1);
+        }
+
+        const angle = Math.atan2(this.vy, Math.abs(this.vx));
+        ctx.rotate(angle);
+
+        if (this.img && this.img.complete) {
+          const aspectRatio = this.img.width / this.img.height;
+          const drawW = this.size * aspectRatio;
+          const drawH = this.size;
+          ctx.drawImage(this.img, -drawW / 2, -drawH / 2, drawW, drawH);
+        } else {
+          this.drawVectorFish(ctx);
+        }
+
+        ctx.restore();
+      }
+
+      drawVectorFish(ctx) {
+        const w = this.size;
+        const h = this.size * 0.5;
+
+        ctx.beginPath();
+        ctx.ellipse(0, 0, w / 2, h / 2, 0, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+
+        ctx.save();
+        ctx.translate(-w / 2 + 5, 0);
+        ctx.rotate(Math.sin(this.tailAngle) * 0.3);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(-18, -12);
+        ctx.lineTo(-18, 12);
+        ctx.closePath();
+        ctx.fillStyle = this.color;
+        ctx.fill();
+        ctx.restore();
+
+        ctx.beginPath();
+        ctx.arc(w / 4, -h / 6, 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(w / 4 + 1, -h / 6, 1.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#000';
+        ctx.fill();
+      }
+    }
+
+    // 重構海龜類別：將邏輯控制集中，並同步更新 DOM 樣式以實現 GIF 原生持續動畫
+    class Turtle {
+      constructor(element) {
+        this.el = element;
+        this.size = 130;
+        this.el.style.width = `${this.size}px`;
+        this.reset();
+      }
+
+      reset() {
+        if (Math.random() < 0.5) {
+          this.x = -this.size - 50;
+          this.vx = Math.random() * 0.4 + 0.3; // 緩慢向右
+        } else {
+          this.x = width + 50;
+          this.vx = -(Math.random() * 0.4 + 0.3); // 緩慢向左
+        }
+        
+        this.y = Math.random() * (height * 0.35) + height * 0.1;
+        this.vy = (Math.random() - 0.5) * 0.05; 
+      }
+
+      update() {
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // 離開畫布後重置
+        if (this.vx > 0 && this.x > width + 100) {
+          this.reset();
+        } else if (this.vx < 0 && this.x < -this.size - 100) {
+          this.reset();
+        }
+
+        // 垂直邊界緩和反彈
+        const margin = 50;
+        if (this.y < margin || this.y > height * 0.5 - margin) {
+          this.vy *= -1;
+        }
+
+        // 同步更新 DOM 位置與翻轉方向
+        this.updateDOM();
+      }
+
+      fleeFrom(px, py) {
+        const dx = this.x - px;
+        const dy = this.y - py;
+        const dist = Math.hypot(dx, dy);
+        const fleeRadius = 160;
+
+        if (dist < fleeRadius) {
+          const speedBoost = (1 - dist / fleeRadius) * 2.5;
+          this.vx += (this.vx > 0 ? 1 : -1) * speedBoost * 0.15;
+          this.vy += (dy / dist) * speedBoost * 0.08;
+        }
+      }
+
+      updateDOM() {
+        const scaleX = this.vx < 0 ? -1 : 1;
+        const angle = this.vy * 0.4; // 隨動傾斜角
+        this.el.style.transform = `translate3d(${this.x}px, ${this.y}px, 0) scaleX(${scaleX}) rotate(${angle}rad)`;
+      }
+    }
+
+    // ==========================================
+    // 場景組件與光影特效
+    // ==========================================
+
+    const ripples = [];
+    const bubbles = Array.from({ length: 35 }, () => new Bubble());
+    let fishes = [];
+    let turtle = null;
+
+    function initFishes(count = 15) {
+      fishes = [];
+      for (let i = 0; i < count; i++) {
+        const img = customFishImages.length > 0 
+          ? customFishImages[i % customFishImages.length] 
+          : null;
+        fishes.push(new Fish(img));
+      }
+
+      // 初始化海龜實例
+      turtle = new Turtle(turtleDom);
+    }
+
+    function reinitFishWithImages() {
+      fishes.forEach((fish, idx) => {
+        if (customFishImages.length > 0) {
+          fish.img = customFishImages[idx % customFishImages.length];
+        }
+      });
+    }
+
+    // 動態頂部光束 overlay
+    function drawCaustics(ctx) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const time = Date.now() * 0.001;
+
+      for (let i = 0; i < 5; i++) {
+        const x = (width / 4) * i + Math.sin(time + i) * 30;
+        const grad = ctx.createLinearGradient(x, 0, x + 100, height);
+        
+        const alpha = isNight ? 0.02 : 0.06;
+        grad.addColorStop(0, `rgba(255, 255, 255, ${alpha})`);
+        grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+
+        ctx.beginPath();
+        ctx.moveTo(x - 40, 0);
+        ctx.lineTo(x + 80, 0);
+        ctx.lineTo(x + 200, height);
+        ctx.lineTo(x - 100, height);
+        ctx.closePath();
+        ctx.fillStyle = grad;
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // ==========================================
+    // 動畫渲染主迴圈 (Render Loop)
+    // ==========================================
+
+    function animate() {
+      ctx.clearRect(0, 0, width, height);
+
+      // 1. 繪製動態光束 Overlay
+      drawCaustics(ctx);
+
+      // 2. 更新與繪製水氣泡
+      bubbles.forEach(b => {
+        b.update();
+        b.draw(ctx);
+      });
+
+      // 3. 更新與繪製魚群
+      fishes.forEach(fish => {
+        fish.update();
+        fish.draw(ctx);
+      });
+
+      // 4. 更新海龜運動邏輯與 DOM 轉向/位移 (保持原生 GIF 幀循環)
+      if (turtle) {
+        turtle.update();
+      }
+
+      // 5. 更新水波漣漪
+      for (let i = ripples.length - 1; i >= 0; i--) {
+        ripples[i].update();
+        ripples[i].draw(ctx);
+        if (ripples[i].alpha <= 0) ripples.splice(i, 1);
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    // ==========================================
+    // 事件處理
+    // ==========================================
+
+    window.addEventListener('click', (e) => {
+      if (e.target.closest('.ui-panel')) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const clickY = e.clientY - rect.top;
+
+      ripples.push(new ParticleRipple(clickX, clickY));
+      fishes.forEach(fish => fish.fleeFrom(clickX, clickY));
+      if (turtle) {
+        turtle.fleeFrom(clickX, clickY);
+      }
+    });
+
+    document.getElementById('btn-theme').addEventListener('click', () => {
+      isNight = !isNight;
+      container.classList.toggle('night-mode', isNight);
+      document.getElementById('btn-theme').innerText = isNight ? '☀️ 切換日光模式' : '🌙 切換夜間模式';
+    });
+
+    document.getElementById('btn-fullscreen').addEventListener('click', () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen();
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen();
+        }
+      }
+    });
+
+    // 啟動
+    autoLoadDefaultFishFolder();
+    initFishes(16);
+    animate();
+
+  </script>
+</body>
+</html>
